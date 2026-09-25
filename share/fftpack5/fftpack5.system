@@ -3,6 +3,7 @@
 (mk:defsystem fftpack5-double
   :source-pathname (maxima::maxima-load-pathname-directory)
   :binary-pathname (maxima::maxima-objdir "share" "fftpack5")
+  :source-extension "lisp"
   :components
   ((:file "fftpack5"
     :source-extension "lisp")
