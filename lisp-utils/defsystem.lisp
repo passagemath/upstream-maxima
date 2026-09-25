@@ -2303,6 +2303,10 @@ D
 					; if NIL, inherit
   (binary-pathname *binary-pathname-default*)
   binary-root-dir
+  prebuilt-binary-root-dir		; A read-only directory of
+					; binaries laid out like
+					; BINARY-ROOT-DIR, or NIL.
+					; See *PREBUILT-BINARY-ROOT*.
   binary-extension			; A string, e.g., "fasl". If
 					; NIL, uses default for
 					; machine-type.
@@ -2743,6 +2747,27 @@ the system definition, if provided."
   (clrhash *source-pathnames-table*)
   (clrhash *binary-pathnames-table*))
 
+;;; A system may name a second, read-only directory of binaries laid
+;;; out like its binary root: the second value of its :BINARY-PATHNAME
+;;; form, e.g. binaries compiled and installed along with the program
+;;; that loads the system.  OPERATE-ON-SYSTEM takes all binaries of the
+;;; system from there when every file of the system has a binary there
+;;; that is not older than its source.  Otherwise, e.g. after a source
+;;; was edited, the system uses its own binary root as usual, compiling
+;;; there whatever is missing or out of date.  A system never mixes
+;;; binaries from the two places, and never writes to the prebuilt one.
+(defvar *prebuilt-binary-root* nil
+  "A cons (ROOT . PREBUILT) while OPERATE-ON-SYSTEM loads a system
+   from its prebuilt binaries: binary pathnames under the system's
+   binary root ROOT are then taken from PREBUILT.  Otherwise NIL.")
+
+(defun component-prebuilt-root (component)
+  "The directory to use in place of COMPONENT's binary root, or NIL."
+  (and *prebuilt-binary-root*
+       (equal (component-root-dir component :binary)
+              (car *prebuilt-binary-root*))
+       (cdr *prebuilt-binary-root*)))
+
 (defun component-full-pathname (component type &optional (version *version*))
   (when component
     (case type
@@ -2753,10 +2778,12 @@ the system definition, if provided."
 	       (setf (gethash component *source-pathnames-table*) new)
 	       new))))
       (:binary
-        (let ((old (gethash component *binary-pathnames-table*)))
+        (let ((old (and (not (component-prebuilt-root component))
+			(gethash component *binary-pathnames-table*))))
 	 (or old
 	     (let ((new (component-full-pathname-i component type version)))
-	       (setf (gethash component *binary-pathnames-table*) new)
+	       (unless (component-prebuilt-root component)
+		 (setf (gethash component *binary-pathnames-table*) new))
 	       new))))
       (otherwise
        (component-full-pathname-i component type version)))))
@@ -2777,7 +2804,9 @@ the system definition, if provided."
 	 (append-directories
 	  (if version-replace
 	      version-dir
-	      (append-directories (component-root-dir component type)
+	      (append-directories (or (and (eq type :binary)
+					   (component-prebuilt-root component))
+				      (component-root-dir component type))
 				  version-dir))
 	  (component-pathname component type))))
 
@@ -3043,11 +3072,14 @@ the system definition, if provided."
   (setf (component-root-dir component :binary)
 	(eval (component-root-dir component :binary)))
 
-  ;; Evaluate the pathname arg
+  ;; Evaluate the pathname arg.  A :BINARY-PATHNAME form may return a
+  ;; second value, a directory of prebuilt binaries.
   (setf (component-pathname component :source)
 	(eval (component-pathname component :source)))
-  (setf (component-pathname component :binary)
-	(eval (component-pathname component :binary)))
+  (multiple-value-bind (binary prebuilt)
+      (eval (component-pathname component :binary))
+    (setf (component-pathname component :binary) binary)
+    (setf (component-prebuilt-binary-root-dir component) prebuilt))
 
   ;; Pass along the host and devices
   (setf (component-host component)
@@ -3636,8 +3668,40 @@ the system definition, if provided."
 		     #-openmcl (optimize (inhibit-warnings 3)))
 	    (unless (component-operation operation)
 	      (error "Operation ~A undefined." operation))
-	    (operate-on-component system operation force))))
+	    (let ((*prebuilt-binary-root*
+		   (prebuilt-binary-root system operation force)))
+	      (operate-on-component system operation force)))))
     (when dribble (dribble))))
+
+(defun prebuilt-binary-root (system operation force)
+  "Returns (ROOT . PREBUILT) if OPERATION on SYSTEM should use the
+   system's prebuilt binaries, else NIL.  That needs a prebuilt
+   directory, an operation that only loads or compiles what is out of
+   date, and a binary there for every file of SYSTEM that is not
+   older than its source."
+  (let ((root (component-root-dir system :binary))
+        (prebuilt (component-prebuilt-binary-root-dir system)))
+    (when (and root prebuilt
+               (not (equal root prebuilt))
+               (or (find operation '(load :load))
+                   (and (find operation '(compile :compile))
+                        (find force '(:new-source :new-source-and-dependents)))))
+      (let ((*prebuilt-binary-root* (cons root prebuilt)))
+        (when (prebuilt-binaries-current-p system)
+          (tell-user-generic
+           (format nil "Using prebuilt binaries in ~A" prebuilt))
+          *prebuilt-binary-root*)))))
+
+(defun prebuilt-binaries-current-p (component)
+  "True if no file of COMPONENT needs compiling, with binary pathnames
+   taken as *PREBUILT-BINARY-ROOT* says."
+  (case (component-type component)
+    ((:file :private-file)
+     (or (component-load-only component)
+         (not (needs-compilation component nil))))
+    (t
+     (every #'prebuilt-binaries-current-p
+            (component-components component)))))
 
 
 (defun compile-system (name &key force
@@ -4838,6 +4902,20 @@ or does not contain valid compiled code."
                      (setf (component-load-time component)
                            (file-write-date binary-pname)))
                    (error (condition)
+                     (when (component-prebuilt-root component)
+                       ;; Leave a prebuilt binary alone and compile into
+                       ;; the system's own binary root instead.
+                       (format *error-output*
+                               "MK:DEFSYSTEM: Error loading ~A: ~A~%; Recompiling...~%"
+                               binary-pname condition)
+                       (let ((*prebuilt-binary-root* nil))
+                         (compile-file-operation component t)
+                         (setq binary-pname
+                               (component-full-pathname component :binary))
+                         (funcall (load-function component) binary-pname)
+                         (setf (component-load-time component)
+                               (file-write-date binary-pname))
+                         (return-from load-file-operation t)))
                      (format *error-output*
                              "MK:DEFSYSTEM: Error loading ~A: ~A~%; Deleting binary and recompiling...~%"
                              binary-pname condition)

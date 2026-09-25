@@ -162,4 +162,36 @@ clean-local:
 	rm -rf bin
 	rm -rf binary
 
+.PHONY: share-binaries
+share-binaries:
+	cd src && $(MAKE) $(AM_MAKEFLAGS) share-binaries
+
+## Install the share package binaries from "make share-binaries" beside
+## each image.  This directory is installed after share/, so that no
+## binary is older than the installed source it was compiled from.
+## Installing resets modification times, so refuse binaries that are
+## older than a share source: Maxima would take them to be current.
+install-data-hook:
+	@for l in $(lisps_enabled); do \
+	  test -d src/binary-$$l/share || continue; \
+	  if test ! -f src/binary-$$l/share.stamp || \
+	     test -n "`find $(top_srcdir)/share -newer src/binary-$$l/share.stamp \
+	              \( -name '*.lisp' -o -name '*.system' -o -name '*.cmn' \) \
+	              2>/dev/null`"; then \
+	    echo "Share sources changed after make share-binaries for $$l."; \
+	    echo "Run make share-binaries again before installing."; \
+	    exit 1; \
+	  fi; \
+	  echo "Installing share package binaries for $$l"; \
+	  for f in `cd src/binary-$$l && find share -type f`; do \
+	    d="$(DESTDIR)$(verpkglibdir)/binary-$$l/`dirname $$f`"; \
+	    $(MKDIR_P) "$$d" && $(INSTALL_DATA) "src/binary-$$l/$$f" "$$d" || exit 1; \
+	  done; \
+	done
+
+uninstall-hook:
+	for l in $(lisps_enabled); do \
+	  rm -rf "$(DESTDIR)$(verpkglibdir)/binary-$$l/share"; \
+	done
+
 check-local: all

@@ -57,7 +57,8 @@ maxima [options] --batch-string='batch_answers_from_file:false; ...'
                  *maxima-userdir*
                  *maxima-tempdir*
                  *maxima-lang-subdir*
-                 *maxima-objdir*))
+                 *maxima-objdir*
+                 *maxima-prebuilt-objdir*))
     ;; Neatly print out the name of the variable (sans *) and the
     ;; corresponding value.
     (format t "~a:~25t~a~%"
@@ -298,6 +299,10 @@ maxima [options] --batch-string='batch_answers_from_file:false; ...'
     ;; NOTE: If this format is changed (e.g. by adding more subdirectories),
     ;;       the function MAXIMA-OBJDIR-BASE may have to be adapted,
     ;;       because its job is to strip these subdirectories.
+
+    ;; Share packages compiled when Maxima was built sit beside the
+    ;; image, laid out like *MAXIMA-OBJDIR* (see MAXIMA-OBJDIR).
+    (setq *maxima-prebuilt-objdir* *maxima-imagesdir*)
 
     (when maxima-htmldir-env
       (setq *maxima-htmldir* (combine-path (maxima-parse-dirstring maxima-htmldir-env) "doc" "info")))
@@ -957,8 +962,13 @@ maxima [options] --batch-string='batch_answers_from_file:false; ...'
 (setf *builtin-$rules* (copy-list $rules))
 
 (defun maxima-objdir (&rest subdirs)
-  "Return a pathname string such that subdirs is a subdirectory of maxima_objdir"
-  (apply #'combine-path *maxima-objdir* subdirs))
+  "Return a pathname string such that subdirs is a subdirectory of maxima_objdir.
+  The second value names the same subdirectory of *MAXIMA-PREBUILT-OBJDIR*,
+  or is NIL.  MK:DEFSYSTEM takes it from a :BINARY-PATHNAME form as a
+  read-only directory of prebuilt binaries for the system."
+  (values (apply #'combine-path *maxima-objdir* subdirs)
+          (and *maxima-prebuilt-objdir*
+               (apply #'combine-path *maxima-prebuilt-objdir* subdirs))))
 
 (defun maxima-objdir-base ()
   "Return the Maxima object directory stripped of the subdirectories

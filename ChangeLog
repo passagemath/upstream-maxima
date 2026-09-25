@@ -1,3 +1,12 @@
 Maxima 5.50-post change log
 ===========================
 
+Other changes:
+--------------
+* Share packages that compile their Lisp files on first load (draw,
+  lapack, linearalgebra, ...) can be compiled when Maxima is built:
+  "make share-binaries" compiles them beside the Lisp image, and
+  "make install" installs them there.  Maxima loads such a package
+  from there, without compiling or writing anything, unless one of its
+  sources is newer; then it compiles the package into maxima_objdir as
+  before

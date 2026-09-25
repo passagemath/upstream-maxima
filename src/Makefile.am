@@ -78,6 +78,49 @@ lisps_enabled = @lisps_enabled@
 bd:
 	for l in $(lisps_enabled); do for d in $(binary_subdirs); do $(MKDIR_P) binary-$$l$$d; done; done
 
+## Share packages that compile their Lisp files with MK:DEFSYSTEM when
+## first loaded.  "make share-binaries" compiles each of them, in a
+## fresh Maxima, into binary-<lispname>/share/, which "make install"
+## installs beside the image.  Maxima loads a package from there unless
+## one of its sources is newer, and else compiles it into maxima_objdir
+## as before (see MAXIMA-OBJDIR in init-cl.lisp).  Keep lapack before
+## hompack and fmin_cobyla before bf_fmin_cobyla: they share binaries.
+## The last loop checks that loading each package now compiles nothing;
+## share.stamp then records when the binaries were complete.
+SHARE_BINARY_PACKAGES = draw graphs numericalio nelder_mead linearalgebra \
+  lapack minpack hompack colnew fmin_cobyla bf_fmin_cobyla fftpack5 \
+  dlsode fft decfp gentran affine
+
+.PHONY: share-binaries
+share-binaries: $(BUILT_FILES)
+	@for l in $(lisps_enabled); do \
+	  dir=$(abs_builddir)/binary-$$l; \
+	  rm -rf $$dir/share $$dir/share-check $$dir/share.stamp; \
+	  case $$l in \
+	    sbcl) opts="--dynamic-space-size 2048";; \
+	    *) opts="";; \
+	  esac; \
+	  for p in $(SHARE_BINARY_PACKAGES); do \
+	    echo "Compiling share package $$p for $$l"; \
+	    MAXIMA_LISP_OPTIONS="$$opts" $(top_builddir)/maxima-local -l $$l \
+	      --no-init -q --quit-on-error \
+	      --batch-string="maxima_objdir: \"$$dir\"\$$ load($$p)\$$" \
+	      > $$dir/share-$$p.log 2>&1 || exit 1; \
+	    if grep 'Maxima encountered a Lisp error' $$dir/share-$$p.log; then \
+	      exit 1; \
+	    fi; \
+	  done; \
+	  for p in $(SHARE_BINARY_PACKAGES); do \
+	    $(top_builddir)/maxima-local -l $$l --no-init -q --quit-on-error \
+	      --batch-string="maxima_objdir: \"$$dir/share-check\"\$$ load($$p)\$$" \
+	      > /dev/null 2>&1 || exit 1; \
+	    if test -n "`find $$dir/share-check -type f 2>/dev/null`"; then \
+	      echo "Loading $$p with $$l compiled it again"; exit 1; \
+	    fi; \
+	  done; \
+	  touch $$dir/share.stamp; \
+	done
+
 ## Some hunks of lisp that get used by more than one implementation
 ##
 ## *MAXIMA-BINARY-DIRECTORY* tells maxima.system (for the lisps that

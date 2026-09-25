@@ -1601,6 +1601,7 @@
 (defvar *maxima-layout-autotools*)
 (defvar *maxima-demodir*)
 (defvar *maxima-objdir*)		;; Where to store object (fasl) files.
+(defvar *maxima-prebuilt-objdir* nil)	;; Read-only fasl files built with Maxima.
 
 (defvar *maxima-prefix*)
 (defvar *maxima-infodir*)
